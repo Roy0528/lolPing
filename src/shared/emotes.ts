@@ -9,7 +9,7 @@ export interface CustomEmote {
   name: string;
   /** Has a `.anim` file besides the still. */
   animated: boolean;
-  /** Has a `.sound` file: it plays when we place the emote, on this computer only (rooms never get it). */
+  /** Has a `.sound` file: it plays when we place the emote, and friends in a room get it too while sharing is on. */
   sound?: boolean;
   /** Which signature effect it plays when it lands: 0–5. Nothing stored (an entry from an older version) plays the plain pop. */
   fx?: number;
@@ -50,6 +50,8 @@ export const ANIM_MAX_SIDE = 1024;
 /** An imported emote's sound: OGG, MP3 or WAV, at most this many bytes and seconds. */
 export const SOUND_MAX_BYTES = 1_048_576;
 export const SOUND_MAX_S = 5;
+/** The largest sound a room carries: 88 chunks, under 20 s over relays. A larger one still plays on this computer. */
+export const ROOM_SOUND_MAX_BYTES = 65_536;
 /**
  * The signature effects a custom emote can play when it lands: 0 is the plain pop, then spin-in, bounce drop, flash
  * focus, pendulum swing and heartbeat. Which one an image plays is stored on its entry (`CustomEmote.fx`, picked by

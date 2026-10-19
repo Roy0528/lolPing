@@ -3,8 +3,10 @@ import { MAX_PACKET, open, seal } from '../../src/main/roomCrypto';
 import {
   isTagColor, isTagRgb, nearestTagColor, readableTagRgb, sameTagRgb, TAG_COLORS, tagColorCss, tagHex, tagRgbFromHex, tagWire,
 } from '../../src/shared/roomColors';
+import { ROOM_SOUND_MAX_BYTES } from '../../src/shared/emotes';
 import {
-  clampNameInput, decodeMessage, decodeSigned, encodeMessage, joinSigned, splitSigned, isOlderThan, isVoteId, MAX_TEXT, sanitizeName, sanitizeText, validateMessage,
+  clampNameInput, decodeMessage, decodeSigned, encodeMessage, joinSigned, splitSigned, isOlderThan, isVoteId, MAX_TEXT, sanitizeName, sanitizeText,
+  SOUND_CHUNKS_MAX, validateMessage,
   type AliveMsg, type BallotMsg, type ChunkMsg, type EmoteMsg, type PingMsg, type PresenceMsg, type RoomMessage, type TextMsg,
   type VoteMsg, type WantMsg,
 } from '../../src/shared/roomProtocol';
@@ -300,6 +302,73 @@ describe('want and chunk messages', () => {
   });
 });
 
+describe('presence sound announcements (es)', () => {
+  const hash = '0123456789abcdef0123456789abcdef';
+  const hash2 = 'fedcba9876543210fedcba9876543210';
+  const snd = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const snd2 = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+  it('round-trips the sound hashes, one per announced emote', () => {
+    const m: PresenceMsg = { ...presence, em: [hash, hash2], es: [snd, ''] };
+    expect(decodeMessage(encodeMessage(m))).toEqual(m);
+  });
+
+  it('leaves es out when it names no sound', () => {
+    expect(validateMessage({ ...presence, em: [hash], es: [''] })).not.toHaveProperty('es');
+  });
+
+  it('pairs es with the raw em before dropping malformed and repeated emotes', () => {
+    expect(validateMessage({ ...presence, em: [hash, 'XYZ', hash2], es: [snd, snd2, snd2] })).toMatchObject({ em: [hash, hash2], es: [snd, snd2] });
+    expect(validateMessage({ ...presence, em: [hash, hash], es: ['', snd] })).not.toHaveProperty('es');
+  });
+
+  it('drops a malformed sound hash, not the emote or the other sounds', () => {
+    expect(validateMessage({ ...presence, em: [hash, hash2], es: ['BAD', snd2] })).toMatchObject({ em: [hash, hash2], es: ['', snd2] });
+  });
+
+  it.each([
+    ['es not an array', { ...presence, em: [hash], es: snd }],
+    ['es shorter than em', { ...presence, em: [hash, hash2], es: [snd] }],
+    ['es longer than em', { ...presence, em: [hash], es: [snd, snd2] }],
+  ])('ignores %s', (_label, raw) => {
+    const m = validateMessage(raw);
+    expect(m).toMatchObject({ t: 'presence' });
+    expect(m).not.toHaveProperty('es');
+  });
+});
+
+describe('sound want and chunk messages (k)', () => {
+  const hash = '0123456789abcdef0123456789abcdef';
+  const want: WantMsg = { ...base, t: 'want', to: 'fedcba9876543210', h: hash, need: [], k: 's' };
+  const last = SOUND_CHUNKS_MAX - 1;
+  const chunk: ChunkMsg = { ...base, t: 'chunk', h: hash, i: last, n: SOUND_CHUNKS_MAX, b: Buffer.from('x'.repeat(750)).toString('base64'), k: 's' };
+
+  it('carries a 64 KB sound in 750-byte chunks', () => {
+    expect(SOUND_CHUNKS_MAX).toBe(Math.ceil(ROOM_SOUND_MAX_BYTES / 750));
+  });
+
+  it('round-trips a sound want and the last chunk of the largest sound', () => {
+    expect(decodeMessage(encodeMessage(want))).toEqual(want);
+    expect(decodeMessage(encodeMessage(chunk))).toEqual(chunk);
+  });
+
+  it('accepts a sound want that lists every chunk', () => {
+    const all = Array.from({ length: SOUND_CHUNKS_MAX }, (_, i) => i);
+    expect(validateMessage({ ...want, need: all })).toMatchObject({ need: all, k: 's' });
+  });
+
+  it.each([
+    ['a want of an unknown kind', { ...want, k: 'x' }],
+    ['a chunk of an unknown kind', { ...chunk, k: 'x' }],
+    ['a sound need index at the chunk max', { ...want, need: [SOUND_CHUNKS_MAX] }],
+    ['a sound need longer than the chunk max', { ...want, need: Array(SOUND_CHUNKS_MAX + 1).fill(0) }],
+    ['a sound chunk count above the max', { ...chunk, n: SOUND_CHUNKS_MAX + 1 }],
+    ['a still chunk count above 17', { ...chunk, n: 18, i: 0, k: undefined }],
+  ])('rejects %s', (_label, raw) => {
+    expect(validateMessage(raw)).toBeNull();
+  });
+});
+
 describe('isOlderThan', () => {
   it('is true only for a plain x.y.z version that is lower', () => {
     expect(isOlderThan('0.4.0', '0.5.0')).toBe(true);
@@ -472,5 +541,24 @@ describe('message signatures', () => {
     };
     const sealed = seal(Buffer.alloc(32), bytes(joinSigned(enc(worst), SIG)));
     expect(sealed.length).toBeLessThanOrEqual(MAX_PACKET);
+  });
+
+  it('fits the largest signed presence in one packet with a sound for every announced emote', () => {
+    const em = Array.from({ length: 9 }, (_, i) => String(i).repeat(32));
+    const worst: PresenceMsg = {
+      ...base, seq: Number.MAX_SAFE_INTEGER, t: 'presence', proto: 1, app: '9'.repeat(64), name: '😀'.repeat(16), color: 7,
+      rgb: [255, 255, 255], status: 'paused', em, es: em.map(() => 'f'.repeat(32)),
+      nf: ['text', 'votes'], pk: `${'B'.repeat(43)}=`,
+    };
+    const sealed = seal(Buffer.alloc(32), bytes(joinSigned(enc(worst), SIG)));
+    expect(sealed.length).toBeLessThanOrEqual(MAX_PACKET);
+  });
+
+  it('fits the largest sound chunk in one packet (chunks are never signed)', () => {
+    const worst: ChunkMsg = {
+      ...base, seq: Number.MAX_SAFE_INTEGER, ts: Number.MAX_SAFE_INTEGER, t: 'chunk', h: '0'.repeat(32), i: SOUND_CHUNKS_MAX - 1,
+      n: SOUND_CHUNKS_MAX, b: 'A'.repeat(1000), k: 's',
+    };
+    expect(seal(Buffer.alloc(32), encodeMessage(worst)).length).toBeLessThanOrEqual(MAX_PACKET);
   });
 });

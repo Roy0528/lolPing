@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveEmoteFile } from '../../src/main/appProtocol';
-import { EmoteLibrary, emoteFileFrom, resolveEmoteArt } from '../../src/main/emoteLibrary';
-import { customAnimUrl, customStillUrl, type CustomEmote, type EmoteFile } from '../../src/shared/emotes';
+import { EmoteLibrary, emoteFileFrom, friendSoundHash, resolveEmoteArt, sharedSoundHash } from '../../src/main/emoteLibrary';
+import {
+  customAnimUrl, customSoundUrl, customStillUrl, ROOM_SOUND_MAX_BYTES, type CustomEmote, type EmoteFile,
+} from '../../src/shared/emotes';
 
 vi.mock('electron', () => ({ net: {}, protocol: {} }));
 
@@ -201,6 +203,33 @@ describe('EmoteLibrary', () => {
     expect(files(lib.dir)).toEqual([`${hash}.sound.ogg`, `${hash}.webp`]);
   });
 
+  it('knows each of our sounds by its own hash and size, after a launch and after every change', async () => {
+    const dir = join(tempDir(), 'emotes');
+    const lib = new EmoteLibrary(dir);
+    const s = still();
+    const hash = hashOf(s);
+    const id = `c:${hash}`;
+    await lib.save({ name: 'x', still: s }, []);
+    expect(lib.soundOf(hash)).toBeNull();
+    const a = ogg(500);
+    await lib.setSound(id, a);
+    expect(lib.soundOf(hash)).toEqual({ hash: hashOf(a), size: 500 });
+    expect(lib.soundBytes(hashOf(a))).toEqual(a);
+
+    const b = mp3(400);
+    await lib.setSound(id, b);
+    expect(lib.soundOf(hash)).toEqual({ hash: hashOf(b), size: 400 });
+    expect(lib.soundBytes(hashOf(a))).toBeNull(); // the old sound is no longer one of ours
+
+    const relaunched = new EmoteLibrary(dir);
+    await relaunched.indexSounds([{ id, name: 'x', animated: false, sound: true }, entry(1)]);
+    expect(relaunched.soundOf(hash)).toEqual({ hash: hashOf(b), size: 400 });
+    await relaunched.remove(id);
+    expect(relaunched.soundOf(hash)).toBeNull();
+    await lib.setSound(id, null);
+    expect(lib.soundOf(hash)).toBeNull();
+  });
+
   it('removes an emote together with its sound', async () => {
     const lib = new EmoteLibrary(join(tempDir(), 'emotes'));
     const id = `c:${hashOf(still())}`;
@@ -254,11 +283,13 @@ describe('resolveEmoteArt', () => {
     expect(resolveEmoteArt(picked.id, [picked], false)).toEqual({ kind: 'custom', url: `lolping://emotes/${hash}.webp`, animated: false, fx: 5 });
   });
 
-  it('plays our own emote’s sound, never a room member’s', () => {
+  it('plays our own emote’s sound, and for a room member’s only the sound they shared', () => {
     const loud: CustomEmote = { ...plain, sound: true };
     const sound = `lolping://emotes/${'cd'.repeat(16)}.sound`;
+    const theirs = 'ef'.repeat(16);
     expect(resolveEmoteArt(loud.id, [loud], false)).toMatchObject({ kind: 'custom', sound });
-    expect(resolveEmoteArt(loud.id, [loud], true)).not.toHaveProperty('sound');
+    expect(resolveEmoteArt(loud.id, [loud], true)).not.toHaveProperty('sound'); // they shared none: ours stays ours
+    expect(resolveEmoteArt(loud.id, [loud], true, () => false, theirs)).toMatchObject({ sound: `lolping://emotes/${theirs}.sound` });
     expect(resolveEmoteArt(plain.id, [plain], false)).not.toHaveProperty('sound');
   });
 
@@ -266,6 +297,36 @@ describe('resolveEmoteArt', () => {
     expect(resolveEmoteArt('facepalm', [], true)).toEqual({ kind: 'bundled', slug: 'facepalm' });
     expect(resolveEmoteArt(moving.id, [plain], false)).toEqual({ kind: 'placeholder' });
     expect(resolveEmoteArt('not_an_emote', [], false)).toEqual({ kind: 'placeholder' });
+  });
+});
+
+describe('sharedSoundHash', () => {
+  const sound = { hash: 'e'.repeat(32), size: 1000 };
+  const on = { shareEmoteSounds: true, friendEmotes: true };
+
+  it('names our sound only while sharing and friends’ emotes are both on', () => {
+    expect(sharedSoundHash(on, sound)).toBe(sound.hash);
+    expect(sharedSoundHash({ ...on, shareEmoteSounds: false }, sound)).toBeNull();
+    expect(sharedSoundHash({ ...on, friendEmotes: false }, sound)).toBeNull(); // nothing would be served: don't make friends ask
+    expect(sharedSoundHash(on, null)).toBeNull();
+  });
+
+  it('names a sound up to the room cap and no larger', () => {
+    expect(sharedSoundHash(on, { ...sound, size: ROOM_SOUND_MAX_BYTES })).toBe(sound.hash);
+    expect(sharedSoundHash(on, { ...sound, size: ROOM_SOUND_MAX_BYTES + 1 })).toBeNull();
+  });
+});
+
+describe('friendSoundHash', () => {
+  const theirs = 'f'.repeat(32);
+  const on = { friendEmotes: true, friendEmoteSounds: true };
+
+  it('plays the sound a member announced once it is cached, while both switches are on', () => {
+    expect(friendSoundHash(on, theirs, (h) => h === theirs)).toBe(theirs);
+    expect(friendSoundHash(on, theirs, () => false)).toBeNull();
+    expect(friendSoundHash(on, null, () => true)).toBeNull();
+    expect(friendSoundHash({ ...on, friendEmoteSounds: false }, theirs, () => true)).toBeNull();
+    expect(friendSoundHash({ ...on, friendEmotes: false }, theirs, () => true)).toBeNull();
   });
 });
 
@@ -384,5 +445,12 @@ describe('resolveEmoteArt with the cache', () => {
 
   it('keeps the placeholder for a malformed ref', () => {
     expect(resolveEmoteArt('nope', [], true, () => true)).toEqual({ kind: 'placeholder' });
+  });
+
+  it('plays the sound a friend shared with their cached still, and none with the placeholder', () => {
+    const theirs = 'b'.repeat(32);
+    expect(resolveEmoteArt(`c:${HASH}`, [], true, (h) => h === HASH, theirs))
+      .toEqual({ kind: 'custom', url: customStillUrl(HASH), animated: false, fx: 0, sound: customSoundUrl(theirs) });
+    expect(resolveEmoteArt(`c:${HASH}`, [], true, () => false, theirs)).toEqual({ kind: 'placeholder' });
   });
 });

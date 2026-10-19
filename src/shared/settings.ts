@@ -81,6 +81,10 @@ export interface Settings {
   customEmotes: CustomEmote[];
   /** Fetch and show room members' custom emotes. Off: nothing is fetched or served, and their images show as the placeholder. */
   friendEmotes: boolean;
+  /** Fetch and play the sounds room members share with their custom emotes (only while friendEmotes is on too). */
+  friendEmoteSounds: boolean;
+  /** Let room members fetch our emotes' sounds, up to ROOM_SOUND_MAX_BYTES each. Off by default: a sound stays on this computer. */
+  shareEmoteSounds: boolean;
   /** Look for a new version on launch and every few hours. Checking by hand always works. */
   autoUpdateCheck: boolean;
   /** The newest version already announced with a toast, as x.y.z, so each version is announced once. */
@@ -134,6 +138,8 @@ export const DEFAULT_SETTINGS: Settings = {
   emoteSound: true,
   customEmotes: [],
   friendEmotes: true,
+  friendEmoteSounds: true,
+  shareEmoteSounds: false,
   autoUpdateCheck: true,
   updateNotifiedVersion: null,
   features: { ...DEFAULT_FEATURES },
@@ -152,7 +158,7 @@ export const LIMITS = {
 
 type NumKey = keyof typeof LIMITS;
 type BoolKey = 'enabledOnStart' | 'clickPing' | 'gameCheck' | 'keepLastPing' | 'muted' | 'tickSound' | 'launchAtStartup' | 'allowInternet' | 'rejoinRoom' | 'roomMuted'
-  | 'emoteClick' | 'emoteSound' | 'friendEmotes' | 'autoUpdateCheck';
+  | 'emoteClick' | 'emoteSound' | 'friendEmotes' | 'friendEmoteSounds' | 'shareEmoteSounds' | 'autoUpdateCheck';
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isVk = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 254;
@@ -336,6 +342,8 @@ export function normalizeSettings(raw: unknown, platform: Platform = 'win', iden
     emoteSound: bool(r.emoteSound, 'emoteSound'),
     customEmotes: custom,
     friendEmotes: bool(r.friendEmotes, 'friendEmotes'),
+    friendEmoteSounds: bool(r.friendEmoteSounds, 'friendEmoteSounds'),
+    shareEmoteSounds: bool(r.shareEmoteSounds, 'shareEmoteSounds'),
     autoUpdateCheck: bool(r.autoUpdateCheck, 'autoUpdateCheck'),
     updateNotifiedVersion: isVersion(r.updateNotifiedVersion) ? r.updateNotifiedVersion : null,
     features: normalizeFeatures(r.features),

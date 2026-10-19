@@ -1,7 +1,7 @@
 import { Button, Dropdown, Input, Option, Slider, Spinner } from '@fluentui/react-components';
 import {
-  ArrowSync24Regular, Chat24Regular, Color24Regular, Desktop24Regular, Globe24Regular, Image24Regular, Keyboard24Regular, Person24Regular,
-  PeopleCommunity24Regular, SpeakerMute24Regular, TopSpeed24Regular, Warning24Regular,
+  ArrowSync24Regular, Chat24Regular, Color24Regular, Desktop24Regular, Globe24Regular, Image24Regular, Keyboard24Regular, MusicNote224Regular,
+  Person24Regular, PeopleCommunity24Regular, SpeakerMute24Regular, TopSpeed24Regular, Warning24Regular,
 } from '@fluentui/react-icons';
 import { useEffect, useRef, useState } from 'react';
 import { featureOn } from '../../../shared/features';
@@ -216,6 +216,8 @@ export function RoomSection({ settings: s, update }: { settings: Settings; updat
       </SettingRow>
       <SwitchRow icon={<Image24Regular />} title={t.friendEmotes} description={t.friendEmotesDesc}
         checked={s.friendEmotes} onChange={(v) => void update({ friendEmotes: v })} />
+      <SwitchRow icon={<MusicNote224Regular />} title={t.friendEmoteSounds} description={t.friendEmoteSoundsDesc}
+        checked={s.friendEmoteSounds} onChange={(v) => void update({ friendEmoteSounds: v })} dim={!s.friendEmotes} />
       <SwitchRow icon={<Globe24Regular />} title={t.roomInternet} description={t.roomInternetDesc}
         checked={s.allowInternet} onChange={(v) => void update({ allowInternet: v })} />
       {featureOn(s, 'roomText') ? (

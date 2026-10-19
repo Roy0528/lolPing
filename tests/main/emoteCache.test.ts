@@ -2,11 +2,18 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, wr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CACHE_MAX_BYTES, CACHE_MAX_FILES, EmoteCache } from '../../src/main/emoteCache';
+import { CACHE_MAX_BYTES, CACHE_MAX_FILES, EmoteCache, SOUND_CACHE_MAX_BYTES } from '../../src/main/emoteCache';
 
 const HASH = (n: number): string => n.toString(16).padStart(32, '0');
 const stillOf = (n: number, size: number): Uint8Array => new Uint8Array(size).fill(n + 1);
 const webpNames = (dir: string): string[] => readdirSync(dir).filter((f) => f.endsWith('.webp'));
+/** An OGG file as far as the type check reads it. */
+const oggOf = (n: number, size: number): Uint8Array => {
+  const out = new Uint8Array(size).fill(n + 1);
+  out.set([0x4f, 0x67, 0x67, 0x53]);
+  return out;
+};
+const soundNames = (dir: string): string[] => readdirSync(dir).filter((f) => /\.sound\.(ogg|mp3|wav)$/.test(f));
 const NAME = /^([0-9a-f]{32})\.webp$/;
 
 let dir: string;
@@ -90,6 +97,52 @@ describe('EmoteCache', () => {
     rmSync(join(dir, `${HASH(3)}.webp`));
     await cache.sweep();
     expect(cache.has(HASH(3))).toBe(false);
+  });
+});
+
+describe('EmoteCache: friends’ sounds', () => {
+  it('stores a verified sound under its audio type and finds it again after a relaunch', async () => {
+    expect(await cache.putSound(HASH(1), oggOf(1, 100))).toBe(true);
+    expect(soundNames(dir)).toEqual([`${HASH(1)}.sound.ogg`]);
+    expect(cache.hasSound(HASH(1))).toBe(true);
+    expect(cache.has(HASH(1))).toBe(false); // a sound is not a still
+
+    const again = new EmoteCache(dir, () => clock);
+    await again.present();
+    expect(again.hasSound(HASH(1))).toBe(true);
+  });
+
+  it('refuses bytes that are not audio, and a hash that is not 32 hex characters', async () => {
+    expect(await cache.putSound(HASH(1), new Uint8Array(100))).toBe(false);
+    expect(await cache.putSound('../escape', oggOf(1, 100))).toBe(false);
+    expect(cache.hasSound(HASH(1))).toBe(false);
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it('keeps sounds within their own byte cap, so sounds never evict stills', async () => {
+    await cache.put(HASH(100), stillOf(1, 100));
+    const perFile = 600_000; // 9 MB / 600 KB ≈ 15 files
+    for (let n = 0; n < 20; n++) await cache.putSound(HASH(n), oggOf(n, perFile));
+    expect(soundNames(dir).length * perFile).toBeLessThanOrEqual(SOUND_CACHE_MAX_BYTES);
+    expect(soundNames(dir).length).toBeLessThan(20);
+    expect(cache.has(HASH(100))).toBe(true);
+  });
+
+  it('evicts the least recently used sound, and touchSound() protects a played one', async () => {
+    const perFile = Math.floor(SOUND_CACHE_MAX_BYTES / 3) - 10; // three fit, a fourth doesn't
+    for (let n = 0; n < 3; n++) await cache.putSound(HASH(n), oggOf(n, perFile));
+    cache.touchSound(HASH(0)); // just played
+    await cache.putSound(HASH(3), oggOf(3, perFile));
+    expect(cache.hasSound(HASH(0))).toBe(true);
+    expect(cache.hasSound(HASH(1))).toBe(false);
+    expect(soundNames(dir)).not.toContain(`${HASH(1)}.sound.ogg`);
+  });
+
+  it('sweep forgets a sound file that vanished', async () => {
+    await cache.putSound(HASH(3), oggOf(3, 100));
+    rmSync(join(dir, `${HASH(3)}.sound.ogg`));
+    await cache.sweep();
+    expect(cache.hasSound(HASH(3))).toBe(false);
   });
 });
 

@@ -17,6 +17,7 @@ node tools/room-peer/run.mjs PING-XXXXX-XXXXX --name Bot --rate 1
 | `--relay` | off | Join through the public relays instead of the LAN |
 | `--emotes` | off | Also send emotes (see below) |
 | `--image` | none | A still `.webp` this peer owns and shares (see below) |
+| `--sound` | none | The sound of `--image`: an OGG, MP3 or WAV of at most 64 KB, shared with it (see below) |
 | `--app` | `room-peer` | The app version it announces. `0.5.2` or newer makes lolPing treat it as able to see text and votes (see below) |
 | `--text` | none | A line of room text, at most 120 characters, sent every 5 s at a random spot on `--display` |
 | `--alive` | off | Every 7 s, an alive line about a random member |
@@ -47,6 +48,16 @@ node tools/room-peer/run.mjs PING-XXXXX-XXXXX --emotes --rate 0.5 --image still.
 ```
 
 Two peers on different ports reach each other too: the second one sends to the first on port 47474, and the first answers.
+
+## Custom emote sounds
+
+The peer also fetches the sounds lolPing shares (Settings → Emotes, **Share my emote sounds in rooms**, which also needs **Show friends' custom emotes** on) and prints `[in] sound <hash> arrived and passed the hash, type and size checks` for each.
+
+With `--sound horn.ogg` beside `--image` it shares that sound: it announces it, prints `[in] want sound <hash>` when lolPing asks for it, and sends it in chunks once lolPing has the image. With `--emotes`, lolPing then plays the sound with the peer's custom emote, as long as **Show friends' custom emotes** and **Play friends' emote sounds** (Room) and **Emote sounds** (Emotes) are on and it isn't muted. The file must be an OGG, MP3 or WAV of at most 64 KB.
+
+```bash
+node tools/room-peer/run.mjs PING-XXXXX-XXXXX --emotes --rate 0.5 --image still.webp --sound horn.ogg
+```
 
 ## Text and votes
 

@@ -1,12 +1,13 @@
 import { Button, Spinner } from '@fluentui/react-components';
 import {
-  CursorClick24Regular, Emoji24Regular, ImageAdd24Regular, ResizeLarge24Regular, Speaker2Regular, Speaker224Regular, SpeakerMuteRegular,
+  CursorClick24Regular, Emoji24Regular, ImageAdd24Regular, ResizeLarge24Regular, Share24Regular, Speaker2Regular, Speaker224Regular,
+  SpeakerMuteRegular,
 } from '@fluentui/react-icons';
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_CLICK_EMOTE, DEFAULT_EMOTE_WHEEL, EMOTE_CATALOG } from '../../../shared/emoteCatalog';
 import {
-  MAX_CUSTOM_EMOTES, customHash, customStillUrl, emoteIconUrl, emoteName, type CustomEmote, type EmoteRef, type ImportError,
-  type SoundError,
+  MAX_CUSTOM_EMOTES, ROOM_SOUND_MAX_BYTES, customHash, customStillUrl, emoteIconUrl, emoteName, type CustomEmote, type EmoteRef,
+  type ImportError, type SoundError,
 } from '../../../shared/emotes';
 import type { Strings } from '../../../shared/i18n';
 import { triggerLabel, type Settings } from '../../../shared/settings';
@@ -43,15 +44,15 @@ function soundMessage(t: Strings, error: SoundError, file: string): string {
   }
 }
 
-/** Checks a sound here and hands it to main, which checks and saves it again. */
-async function soundFile(id: EmoteRef, file: File): Promise<SoundError | null> {
+/** Checks a sound here and hands it to main, which checks and saves it again. `big`: saved, but too large for rooms. */
+async function soundFile(id: EmoteRef, file: File): Promise<{ error: SoundError } | { big: boolean }> {
   try {
     const prepared = await prepareSound(file);
-    if (!prepared.ok) return prepared.error;
+    if (!prepared.ok) return { error: prepared.error };
     const result = await api.setEmoteSound(id, prepared.bytes);
-    return result.ok ? null : result.error;
+    return result.ok ? { big: prepared.bytes.length > ROOM_SOUND_MAX_BYTES } : { error: result.error };
   } catch {
-    return 'disk';
+    return { error: 'disk' };
   }
 }
 
@@ -104,12 +105,12 @@ function useImports(t: Strings) {
       setBusy(false);
     });
   };
-  /** Gives emote `id` the sound in `file`, in the same queue as the imports; its error shows with theirs. */
+  /** Gives emote `id` the sound in `file`, in the same queue as the imports; its error shows with theirs, as does a sound too big for rooms. */
   const importSound = (id: EmoteRef, file: File) => {
     queue.current = queue.current.then(async () => {
       setBusy(true);
-      const error = await soundFile(id, file);
-      setErrors(error ? [soundMessage(t, error, file.name)] : []);
+      const result = await soundFile(id, file);
+      setErrors('error' in result ? [soundMessage(t, result.error, file.name)] : result.big ? [t.soundTooBigToShare(file.name)] : []);
       setBusy(false);
     });
   };
@@ -209,6 +210,8 @@ export function EmoteSection({ settings: s, update, lengthUnit }: { settings: Se
         format={(v) => `${v} ${lengthUnit}`} onChange={(v) => void update({ emoteSizePx: v })} dim={keyOff} />
       <SwitchRow icon={<Speaker224Regular />} title={t.emoteSound} description={t.emoteSoundDesc}
         checked={s.emoteSound} onChange={(v) => void update({ emoteSound: v })} dim={keyOff} />
+      <SwitchRow icon={<Share24Regular />} title={t.shareEmoteSounds} description={t.shareEmoteSoundsDesc}
+        checked={s.shareEmoteSounds} onChange={(v) => void update({ shareEmoteSounds: v })} dim={!s.friendEmotes} />
       <WheelEditor wheel={s.emoteWheel} center={s.clickEmoteId} centerOn={s.emoteClick && !keyOff} trigger={key}
         pool={pool} poolExtra={importer} onDropFiles={importFiles}
         onFxPick={(id, fx) => void api.setEmoteFx(id, fx)}

@@ -1,7 +1,7 @@
 import { EMOTE_CATALOG } from '../../shared/emoteCatalog';
 import {
   CUSTOM_EMOTE_URL, allEmoteAssetFiles, catalogEmote, customAnimUrl, customHash, customSoundUrl, customStillUrl, emoteSoundUrl,
-  isBundledEmote,
+  isBundledEmote, SOUND_MAX_S,
   type EmoteArt, type EmoteRef,
 } from '../../shared/emotes';
 import {
@@ -89,7 +89,8 @@ function emote(owner: string, art: EmoteArt, x: number, y: number, tag?: PingTag
   stage.spawn(owner, art, x, y, { sizePx: settings.emoteSizePx, tag });
   if (!settings.emoteSound) return;
   if (art.kind === 'bundled' && catalogEmote(art.slug)?.hasSound) sounds.play(`emote:${art.slug}`, volume());
-  if (art.kind === 'custom' && art.sound) void sounds.playUrl(art.sound, volume());
+  // A friend's sound was checked for its type and size only, never decoded: it stops at the length an import allows.
+  if (art.kind === 'custom' && art.sound) void sounds.playUrl(art.sound, volume(), SOUND_MAX_S);
 }
 
 const wheelOf = (p: { wheel?: WheelKind }): Wheel => (p.wheel === 'emote' ? emoteWheel : pingWheel);
