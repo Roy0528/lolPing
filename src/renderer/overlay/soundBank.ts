@@ -24,10 +24,10 @@ export class SoundBank {
     return results.filter((r): r is string => r !== null);
   }
 
-  /** Plays the sound at `url`, loading it under that key the first time. A file that won't load plays nothing. */
-  async playUrl(url: string, volume01: number): Promise<void> {
+  /** Plays the sound at `url`, loading it under that key the first time, for at most `maxS` seconds. A file that won't load plays nothing. */
+  async playUrl(url: string, volume01: number, maxS?: number): Promise<void> {
     if (!this.buffers.has(url)) await this.load([{ key: url, url }]);
-    this.play(url, volume01);
+    this.play(url, volume01, maxS);
   }
 
   /** Drops the loaded sounds whose key starts with `prefix`, so the next play loads them again. */
@@ -35,7 +35,7 @@ export class SoundBank {
     for (const key of this.buffers.keys()) if (key.startsWith(prefix)) this.buffers.delete(key);
   }
 
-  play(key: string, volume01: number): void {
+  play(key: string, volume01: number, maxS?: number): void {
     const buffer = this.buffers.get(key);
     if (!buffer || volume01 <= 0 || this.voices >= MAX_VOICES) return;
     if (this.ctx.state !== 'running') void this.ctx.resume();
@@ -46,6 +46,7 @@ export class SoundBank {
     src.connect(gain).connect(this.ctx.destination);
     this.voices++;
     src.onended = () => this.voices--;
-    src.start();
+    if (maxS === undefined) src.start();
+    else src.start(0, 0, maxS);
   }
 }

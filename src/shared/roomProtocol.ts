@@ -1,4 +1,4 @@
-import { ANNOUNCED_MAX, HASH_RE, isEmoteFx, isEmoteRefShape, type EmoteRef } from './emotes';
+import { ANNOUNCED_MAX, HASH_RE, isEmoteFx, isEmoteRefShape, ROOM_SOUND_MAX_BYTES, type EmoteRef } from './emotes';
 import { isPingId, type PingId } from './pings';
 import { isTagColor, isTagRgb, type TagRgb } from './roomColors';
 
@@ -37,6 +37,11 @@ export interface PresenceMsg extends Base {
   status: MemberStatus;
   /** Added in 0.5.2: the 32-hex hashes of the custom emotes on our wheel and centre, at most 9. Older apps leave it out. */
   em: string[];
+  /**
+   * Added in 0.5.4: the shared sound of each emote in `em`, as the 32-hex hash of the sound file, or '' for none. Left
+   * out when there is none at all; older apps leave it out and ignore ours.
+   */
+  es?: string[];
   /** Added in 0.5.2: the room features this peer has switched off. Older apps leave it out, which reads as none. */
   nf: RoomFeatureOff[];
   /** Added in 0.5.2: the Ed25519 public key, raw, in base64. The peer id is its hash, and every message but a chunk is signed with it. */
@@ -99,6 +104,8 @@ export interface WantMsg extends Base {
   to: string;
   h: string;
   need: number[];
+  /** Added in 0.5.4: 's' asks for the sound whose hash is `h` instead of a still. */
+  k?: 's';
 }
 /** Added in 0.5.2: one slice `i` of `n` of the still `h`, base64 in `b`. A chunk's sealed packet stays under MAX_PACKET. */
 export interface ChunkMsg extends Base {
@@ -107,6 +114,8 @@ export interface ChunkMsg extends Base {
   i: number;
   n: number;
   b: string;
+  /** Added in 0.5.4: 's' when it is a slice of the sound `h`. Older apps take it for a still that nobody announced. */
+  k?: 's';
 }
 export interface ByeMsg extends Base {
   t: 'bye';
@@ -148,22 +157,31 @@ export const EMOTE_CHUNK_B64_MAX = 1000;
 export const EMOTE_CHUNKS_MAX = 17;
 /** Chunk indexes in a `want`'s `need`: at most this many entries, each below EMOTE_CHUNKS_MAX. */
 export const EMOTE_NEED_MAX = 64;
+/** A sound's chunks, which is also the most indexes a sound `want` lists: ROOM_SOUND_MAX_BYTES in 750-byte slices. */
+export const SOUND_CHUNKS_MAX = Math.ceil(ROOM_SOUND_MAX_BYTES / ((EMOTE_CHUNK_B64_MAX / 4) * 3));
 const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 /** 32 raw bytes in base64. */
 const PK_RE = /^[A-Za-z0-9+/]{43}=$/;
 /** The signature tail: 64 raw bytes in base64, as the last field, so a receiver can cut it off and get the signed bytes. */
 const SIG_TAIL_RE = /,"sg":"([A-Za-z0-9+/]{86}==)"}$/;
 
-/** The announced hashes, rebuilt: well-formed and distinct, the first ANNOUNCED_MAX. Anything else means none. */
-function emList(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  const out: string[] = [];
-  for (const v of raw) {
-    if (typeof v !== 'string' || !HASH_RE.test(v) || out.includes(v)) continue;
-    out.push(v);
-    if (out.length >= ANNOUNCED_MAX) break;
+/**
+ * The announced hashes, rebuilt: well-formed and distinct, the first ANNOUNCED_MAX. Anything else means none. Each keeps
+ * the sound at its raw position in `rawEs` (an `es` of another length is ignored whole, as is one that names no sound).
+ */
+function emList(raw: unknown, rawEs: unknown): { em: string[]; es?: string[] } {
+  if (!Array.isArray(raw)) return { em: [] };
+  const paired = Array.isArray(rawEs) && rawEs.length === raw.length ? rawEs : null;
+  const em: string[] = [];
+  const es: string[] = [];
+  for (const [i, v] of raw.entries()) {
+    if (typeof v !== 'string' || !HASH_RE.test(v) || em.includes(v)) continue;
+    em.push(v);
+    const s: unknown = paired?.[i];
+    es.push(typeof s === 'string' && HASH_RE.test(s) ? s : '');
+    if (em.length >= ANNOUNCED_MAX) break;
   }
-  return out;
+  return es.some((s) => s !== '') ? { em, es } : { em };
 }
 
 /** The switched-off features, rebuilt: known ones only, once each. Anything else means none. */
@@ -180,12 +198,12 @@ export function validateMessage(raw: unknown): RoomMessage | null {
   const base = { peer, seq, ts };
   switch (t) {
     case 'presence': {
-      const { proto, app, name, color, rgb, status, em, nf, pk } = raw;
+      const { proto, app, name, color, rgb, status, em, es, nf, pk } = raw;
       if (!isUint(proto) || typeof app !== 'string' || app.length > MAX_APP_VERSION || typeof name !== 'string') return null;
       if (!isTagColor(color) || !STATUSES.includes(status as MemberStatus)) return null;
       const presence: PresenceMsg = {
         t, ...base, proto, app, name: sanitizeName(name.slice(0, 256)), color, status: status as MemberStatus,
-        em: emList(em), nf: nfList(nf), ...(typeof pk === 'string' && PK_RE.test(pk) ? { pk } : {}),
+        ...emList(em, es), nf: nfList(nf), ...(typeof pk === 'string' && PK_RE.test(pk) ? { pk } : {}),
       };
       // A malformed custom colour is dropped rather than the whole presence: an unreadable tag beats a missing member.
       return isTagRgb(rgb) ? { ...presence, rgb } : presence;
@@ -230,19 +248,24 @@ export function validateMessage(raw: unknown): RoomMessage | null {
       return isVoteId(id) && typeof yes === 'boolean' ? { t, ...base, id, yes } : null;
     }
     case 'want': {
-      const { to, h, need } = raw;
+      const { to, h, need, k } = raw;
       if (typeof to !== 'string' || !/^[0-9a-f]{16}$/.test(to) || typeof h !== 'string' || !HASH_RE.test(h)) return null;
-      if (!Array.isArray(need) || need.length > EMOTE_NEED_MAX) return null;
-      if (!need.every((v) => isUint(v) && (v as number) < EMOTE_CHUNKS_MAX)) return null;
-      return { t, ...base, to, h, need: [...new Set(need)] };
+      const sound = k === 's';
+      if (k !== undefined && !sound) return null;
+      // A sound want may list every one of its chunks; a still keeps the limits older apps check.
+      const chunks = sound ? SOUND_CHUNKS_MAX : EMOTE_CHUNKS_MAX;
+      if (!Array.isArray(need) || need.length > (sound ? SOUND_CHUNKS_MAX : EMOTE_NEED_MAX)) return null;
+      if (!need.every((v) => isUint(v) && (v as number) < chunks)) return null;
+      return { t, ...base, to, h, need: [...new Set(need)], ...(sound ? { k: 's' as const } : {}) };
     }
     case 'chunk': {
-      const { h, i, n, b } = raw;
-      if (typeof h !== 'string' || !HASH_RE.test(h)) return null;
-      if (!isUint(n) || (n as number) < 1 || (n as number) > EMOTE_CHUNKS_MAX) return null;
+      const { h, i, n, b, k } = raw;
+      const sound = k === 's';
+      if (typeof h !== 'string' || !HASH_RE.test(h) || (k !== undefined && !sound)) return null;
+      if (!isUint(n) || (n as number) < 1 || (n as number) > (sound ? SOUND_CHUNKS_MAX : EMOTE_CHUNKS_MAX)) return null;
       if (!isUint(i) || (i as number) >= (n as number)) return null;
       if (typeof b !== 'string' || b.length > EMOTE_CHUNK_B64_MAX || b.length % 4 !== 0 || !B64_RE.test(b)) return null;
-      return { t, ...base, h, i: i as number, n: n as number, b };
+      return { t, ...base, h, i: i as number, n: n as number, b, ...(sound ? { k: 's' as const } : {}) };
     }
     case 'bye':
       return { t, ...base };

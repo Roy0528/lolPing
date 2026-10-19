@@ -187,6 +187,12 @@ describe('room settings', () => {
     expect(normalizeSettings({ friendEmotes: 'no' }).friendEmotes).toBe(true);
   });
 
+  it('plays friends’ emote sounds unless turned off, and shares ours only once turned on', () => {
+    expect(normalizeSettings({})).toMatchObject({ friendEmoteSounds: true, shareEmoteSounds: false }); // an older file shares nothing new
+    expect(normalizeSettings({ friendEmoteSounds: false, shareEmoteSounds: true })).toMatchObject({ friendEmoteSounds: false, shareEmoteSounds: true });
+    expect(normalizeSettings({ friendEmoteSounds: 0, shareEmoteSounds: 'yes' })).toMatchObject({ friendEmoteSounds: true, shareEmoteSounds: false });
+  });
+
   it('defaults to Player and colour 0 without an identity', () => {
     expect(DEFAULT_SETTINGS).toMatchObject({ displayName: 'Player', tagColor: 0 });
   });

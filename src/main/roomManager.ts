@@ -106,6 +106,8 @@ export interface RoomDeps {
   resolveTarget(d: number): { displayId: number; width: number; height: number } | null;
   /** The 32-hex hashes our presence announces: the custom emotes on our wheel and centre. Read on every presence. */
   announceEmotes(): readonly string[];
+  /** The shared sound of each of `em` (what announceEmotes gave), as its 32-hex hash or '' for none. */
+  announceSounds?(em: readonly string[]): readonly string[];
 }
 
 interface Member {
@@ -134,7 +136,7 @@ interface Member {
 /**
  * The room: who is in it, what we send, and what we let through. Talks to the network only through transports,
  * which carry sealed packets. Events: 'state' (RoomStateCore), 'remotePing' (RemotePing), 'remoteEmote' (RemoteEmote), 'toast' (RoomToast),
- * 'remoteText' (RemoteText: text and alive lines), 'vote' (VoteMsg), 'ballot' (BallotMsg), 'saveCode' (canonical code | null: what "rejoin last room" should remember), 'emotes' (peer, announced hashes),
+ * 'remoteText' (RemoteText: text and alive lines), 'vote' (VoteMsg), 'ballot' (BallotMsg), 'saveCode' (canonical code | null: what "rejoin last room" should remember), 'emotes' (peer, announced hashes, their sounds),
  * 'want' (WantMsg), 'chunk' (ChunkMsg) and 'memberGone' (peer), which EmoteTransfer answers.
  */
 export class RoomManager extends EventEmitter {
@@ -610,7 +612,7 @@ export class RoomManager extends EventEmitter {
     m.em = msg.em;
     // Every presence, so a hash whose assembly gave up is asked for again: EmoteTransfer skips what is already here.
     // A paused lolPing neither fetches nor serves stills; the next presence after unpausing starts prefetch again.
-    if (!this.paused) this.emit('emotes', m.peer, [...m.em]);
+    if (!this.paused) this.emit('emotes', m.peer, [...m.em], [...(msg.es ?? [])]);
     this.heard(m, t, key);
     if (!this.answered.has(key)) {
       this.answered.add(key);
@@ -683,9 +685,13 @@ export class RoomManager extends EventEmitter {
 
   private presencePacket(): Buffer {
     const p = this.deps.profile();
+    const em = [...this.deps.announceEmotes()];
+    const es = [...(this.deps.announceSounds?.(em) ?? [])];
     return this.seal({
       t: 'presence', proto: PROTOCOL_VERSION, app: this.deps.appVersion, name: p.name, color: p.color, status: this.status(),
-      em: [...this.deps.announceEmotes()], pk: this.identity.pk.toString('base64'),
+      em, pk: this.identity.pk.toString('base64'),
+      // Left out when no emote has a shared sound, as receivers read it.
+      ...(es.length === em.length && es.some((s) => s !== '') ? { es } : {}),
       // Left out when nothing is off, so a presence to an older peer carries nothing new.
       ...(p.nf.length ? { nf: [...p.nf] } : {}),
       // Left out rather than sent as null: a peer on an older build ignores it either way, and this keeps the packet small.

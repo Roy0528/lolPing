@@ -12,7 +12,9 @@ import { deriveRoomKeys, makeIdentity, open, peerIdOf, seal, signBody } from '..
 import { RateLimiter } from '../../src/main/rateLimiter';
 import { RELAY_PING_BURST, RELAY_PING_RATE } from '../../src/main/roomManager';
 import type { Transport } from '../../src/main/transport';
+import { sniffAudio } from '../../src/shared/audioSniff';
 import { EMOTE_CATALOG } from '../../src/shared/emoteCatalog';
+import { ROOM_SOUND_MAX_BYTES } from '../../src/shared/emotes';
 import { ALL_PINGS } from '../../src/shared/pings';
 import { parseRoomCode } from '../../src/shared/roomCode';
 import {
@@ -32,6 +34,7 @@ const { values, positionals } = parseArgs({
     relay: { type: 'boolean', default: false }, // through the public relays instead of the LAN
     emotes: { type: 'boolean', default: false }, // also send emotes, alternating with the pings
     image: { type: 'string' }, // a still .webp this peer owns: it announces and serves it, and its custom emote uses it
+    sound: { type: 'string' }, // the sound of --image (OGG, MP3 or WAV, up to 64 KB): announced beside it and served
     app: { type: 'string', default: 'room-peer' }, // the app version it announces; 0.5.2 or newer can see text and votes
     text: { type: 'string' }, // a room text line to send every 5 s
     alive: { type: 'boolean', default: false }, // an alive line about a random member every 7 s
@@ -45,7 +48,7 @@ const { values, positionals } = parseArgs({
 
 const parsed = parseRoomCode(positionals.join(' '));
 if (!parsed.ok) {
-  console.error('usage: node tools/room-peer/run.mjs PING-XXXXX-XXXXX [--name Bot] [--color 0-7] [--rate 1] [--host 127.0.0.1] [--port 47475] [--display 1] [--relay] [--emotes] [--image still.webp]'
+  console.error('usage: node tools/room-peer/run.mjs PING-XXXXX-XXXXX [--name Bot] [--color 0-7] [--rate 1] [--host 127.0.0.1] [--port 47475] [--display 1] [--relay] [--emotes] [--image still.webp] [--sound horn.ogg]'
     + ' [--app 0.5.2] [--text "hello"] [--alive] [--vote ff|ready] [--answer yes|no] [--nf text,votes] [--legacy] [--forge <peer id>]');
   process.exit(1);
 }
@@ -91,17 +94,25 @@ if (image && checkStill(image) !== null) {
   process.exit(1);
 }
 const imageHash = image ? createHash('sha256').update(image).digest('hex').slice(0, 32) : null;
+// --sound: shared with the room as the app shares one, so it must be audio and fit the room cap. Its ID is its own hash.
+const sound = values.sound ? new Uint8Array(readFileSync(values.sound)) : null;
+if (sound && (!imageHash || !sniffAudio(sound) || sound.length > ROOM_SOUND_MAX_BYTES)) {
+  console.error(`--sound needs --image, and must be an OGG, MP3 or WAV of at most ${ROOM_SOUND_MAX_BYTES.toLocaleString('en')} bytes`);
+  process.exit(1);
+}
+const soundHash = sound ? createHash('sha256').update(sound).digest('hex').slice(0, 32) : null;
 const presence = (): Buffer =>
   packet({ t: 'presence', proto: PROTOCOL_VERSION, app: values.app, name: values.name, color: Number(values.color), status: 'on',
-    em: imageHash ? [imageHash] : [], nf, ...(identity ? { pk: identity.pk.toString('base64') } : {}) });
+    em: imageHash ? [imageHash] : [], ...(soundHash ? { es: [soundHash] } : {}), nf, ...(identity ? { pk: identity.pk.toString('base64') } : {}) });
 
 const transport: Transport = values.relay
   ? new RelayTransport()
   : new LanTransport({ port: Number(values.port), seeds: [{ host: values.host!, port: 47474 }] });
 const label = values.relay ? 'relay' : 'lan';
-// Custom emote stills, both ways, through the app's own transfer logic: lolPing's announced stills are fetched and
-// verified here, and --image is served to lolPing.
+// Custom emote stills and sounds, both ways, through the app's own transfer logic: lolPing's announced stills and
+// shared sounds are fetched and verified here, and --image and --sound are served to lolPing.
 const received = new Set<string>();
+const receivedSounds = new Set<string>();
 const lanKeys = new Map<string, string>(); // member peer ID → the address its packets come from
 const answered = new Set<string>();
 const relayCap = new RateLimiter(Date.now);
@@ -116,6 +127,15 @@ const transfer = new EmoteTransfer({
   put: (h) => {
     received.add(h);
     console.log(`[in] still ${h} arrived and passed the hash and image checks`);
+  },
+  haveSound: (h) => h === soundHash || receivedSounds.has(h),
+  sound: (h) => (h === soundHash ? sound : null),
+  announcedSounds: () => (soundHash ? [soundHash] : []),
+  fetchSounds: () => true,
+  putSound: async (h) => {
+    receivedSounds.add(h);
+    console.log(`[in] sound ${h} arrived and passed the hash, type and size checks`);
+    return true;
   },
   routeOf: (p) => (values.relay ? 'shared' : lanKeys.has(p) ? 'lan' : null),
   sendToLan: (p, body) => {
@@ -145,7 +165,7 @@ transport.on('packet', (from: string, data: Uint8Array) => {
   if (msg.t === 'presence') names.set(msg.peer, msg.name);
   if (msg.t === 'want') {
     if (msg.to !== peer) return;
-    console.log(`[in] want ${msg.h} ${msg.need.length ? `chunks ${msg.need.join(', ')}` : '(all chunks)'}`);
+    console.log(`[in] want ${msg.k === 's' ? 'sound ' : ''}${msg.h} ${msg.need.length ? `chunks ${msg.need.join(', ')}` : '(all chunks)'}`);
     transfer.onWant(msg);
   } else if (msg.t === 'chunk') transfer.onChunk(msg);
   else if (msg.t === 'ping') console.log(`[in] ${msg.ping} on display ${msg.d} at ${msg.x}, ${msg.y} from ${from}`);
@@ -158,11 +178,12 @@ transport.on('packet', (from: string, data: Uint8Array) => {
     answerVote(msg.id, VOTE_MS[msg.kind]);
   } else if (msg.t === 'ballot') console.log(`[in] ballot ${msg.yes ? 'yes' : 'no'} ${msg.id} from ${nameOf(msg.peer)}`);
   else if (msg.t === 'presence') {
-    console.log(`[in] presence: ${msg.name} (${msg.status})${msg.em.length ? `, announces ${msg.em.join(', ')}` : ''}`);
+    const sounds = msg.es?.filter(Boolean) ?? [];
+    console.log(`[in] presence: ${msg.name} (${msg.status})${msg.em.length ? `, announces ${msg.em.join(', ')}` : ''}${sounds.length ? `, sounds ${sounds.join(', ')}` : ''}`);
     // Answer a new member straight away, as the app does: a second room-peer on another port hears no broadcast.
     if (!values.relay && !answered.has(msg.peer)) transport.sendTo(from, presence());
     answered.add(msg.peer);
-    transfer.announced(msg.peer, msg.em);
+    transfer.announced(msg.peer, msg.em, msg.es);
   } else {
     console.log(`[in] bye from ${msg.peer}`);
     transfer.memberGone(msg.peer);

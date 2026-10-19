@@ -55,8 +55,11 @@ export class OverlayManager extends EventEmitter {
   private wheelDisplay: number | null = null;
   private wheelKind: WheelKind = 'ping';
 
-  /** `resolveArt` says what an emote looks like: `remote` is true for a room member's, whose files may be missing here. */
-  constructor(private settings: OverlaySettings, private readonly resolveArt: (ref: EmoteRef, remote: boolean) => EmoteArt) {
+  /**
+   * `resolveArt` says what an emote looks like: `remote` is true for a room member's, whose files may be missing here,
+   * and `peer` is that member, whose shared sound it may carry.
+   */
+  constructor(private settings: OverlaySettings, private readonly resolveArt: (ref: EmoteRef, remote: boolean, peer?: string) => EmoteArt) {
     super();
   }
 
@@ -156,7 +159,7 @@ export class OverlayManager extends EventEmitter {
 
   /** A room member's emote, already mapped onto one of our displays. It replaces their earlier one, whichever display that was on. */
   spawnRemoteEmote(p: { displayId: number; x: number; y: number; ref: EmoteRef; fx?: number; peer: string; tag: PingTag }): void {
-    const art = this.resolveArt(p.ref, true);
+    const art = this.resolveArt(p.ref, true, p.peer);
     // The effect is the sender's choice, so the one on their message wins — over a cached still's plain pop, and over
     // the effect we picked if we happen to have the same image imported.
     const withFx = art.kind === 'custom' ? { ...art, fx: p.fx ?? 0 } : art;

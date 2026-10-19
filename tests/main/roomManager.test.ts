@@ -828,20 +828,22 @@ describe('internet over a shared transport', () => {
 
 
 describe('emote transfers', () => {
-  let emotes: { peer: string; hashes: string[] }[];
+  let emotes: { peer: string; hashes: string[]; sounds?: string[] }[];
   let wants: RoomMessage[];
   let chunks: RoomMessage[];
   const hash = '0123456789abcdef0123456789abcdef';
+  const snd = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
   /** The room under test, with the self peer id pinned so `want` addressing can be asserted. */
-  const make = (): RoomManager => {
+  const make = (announceSounds?: (em: readonly string[]) => readonly string[]): RoomManager => {
     const r = new RoomManager({
       transports: [lan], now: () => Date.now(), randomBytes: (n) => new Uint8Array(n).fill(0xab),
       deriveKeys: async () => KEYS, appVersion: '0.5.1', profile: () => profile,
       resolveTarget: (d) => (d === 1 ? { displayId: 100, width: 1920, height: 1080 } : null),
       announceEmotes: () => [hash],
+      ...(announceSounds ? { announceSounds } : {}),
     });
-    r.on('emotes', (peer: string, hashes: string[]) => emotes.push({ peer, hashes }));
+    r.on('emotes', (peer: string, hashes: string[], sounds: string[]) => emotes.push({ peer, hashes, ...(sounds.length ? { sounds } : {}) }));
     r.on('want', (w: RoomMessage) => wants.push(w));
     r.on('chunk', (c: RoomMessage) => chunks.push(c));
     return r;
@@ -872,6 +874,24 @@ describe('emote transfers', () => {
     expect(emotes.at(-1)).toEqual({ peer: '1111111111111111', hashes: [hash] });
     const mine = sentMessages('lan:a').find((m) => m.t === 'presence');
     expect(mine).toMatchObject({ em: [hash] });
+  });
+
+  it('announces the shared sound of each announced emote, and hands a member’s sounds over with their hashes', async () => {
+    room.quit();
+    room = make((em) => em.map(() => snd));
+    await joinActive();
+    const alex = new Remote('1111111111111111', 'lan:a', lan);
+    alex.presence({ em: [hash], es: [snd] });
+    expect(emotes.at(-1)).toEqual({ peer: '1111111111111111', hashes: [hash], sounds: [snd] });
+    expect(sentMessages('lan:a').find((m) => m.t === 'presence')).toMatchObject({ em: [hash], es: [snd] });
+  });
+
+  it('leaves es out of our presence while no announced emote has a shared sound', async () => {
+    room.quit();
+    room = make((em) => em.map(() => ''));
+    await joinActive();
+    new Remote('1111111111111111', 'lan:a', lan).presence();
+    expect(sentMessages('lan:a').find((m) => m.t === 'presence')).not.toHaveProperty('es');
   });
 
   it('hands a want addressed to us to the transfer layer, and drops one aimed elsewhere', async () => {
