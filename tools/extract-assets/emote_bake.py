@@ -1788,21 +1788,129 @@ refresh();
 
 
 
+# ---- local emotes (extract_assets.py LOCAL_EMOTES): a still and a sound kept in the repo, not read from League ----
+LOCAL_DIR = Path(__file__).resolve().parent / 'local-emotes'
+LOCAL_ART_PX = 256                 # the art box: the overlay draws a bundled emote's CANVAS 1.25 times the emote size
+ICON_PX = 128                      # the wheel and settings icon, the size of League's _selector icons
+
+
+def _cubic_bezier(x1: float, y1: float, x2: float, y2: float):
+    """A CSS cubic-bezier() timing function: progress in [0, 1] -> eased progress."""
+    def ease(p: float) -> float:
+        lo, hi = 0.0, 1.0
+        for _ in range(40):            # bisection on x(t), far below a pixel
+            t = (lo + hi) / 2
+            if 3 * (1 - t) ** 2 * t * x1 + 3 * (1 - t) * t * t * x2 + t ** 3 < p:
+                lo = t
+            else:
+                hi = t
+        t = (lo + hi) / 2
+        return 3 * (1 - t) ** 2 * t * y1 + 3 * (1 - t) * t * t * y2 + t ** 3
+    return ease
+
+
+EASE_OUT, EASE_IN, EASE_IN_OUT = _cubic_bezier(0, 0, .58, 1), _cubic_bezier(.42, 0, 1, 1), _cubic_bezier(.42, 0, .58, 1)
+
+
+def _keyframes(p: float, frames: list[tuple[float, float]], ease) -> float:
+    """CSS keyframes [(offset, value)] at progress p, with the timing function applied to each segment."""
+    for (o0, v0), (o1, v1) in zip(frames, frames[1:]):
+        if p <= o1:
+            return v0 + (v1 - v0) * ease((p - o0) / (o1 - o0))
+    return frames[-1][1]
+
+
+def envelope_at(t: float) -> tuple[float, float, float]:
+    """(scale, y offset in art widths, opacity) at t s of the plain envelope an imported emote plays, as in
+    src/renderer/shared/emoteFx.css: emoteIn .25s ease-out, emoteBob 1.4s ease-in-out (4 px at the default 150 px
+    size), then emoteOut .35s ease-in over the last 0.35 s of DURATION."""
+    bob = _keyframes(t % 1.4 / 1.4, [(0, 0), (.25, -4), (.75, 4), (1, 0)], EASE_IN_OUT) / 150
+    out_at = DURATION - 0.35
+    if t >= out_at:
+        k = EASE_IN(min(1.0, (t - out_at) / 0.35))
+        return 1 - 0.15 * k, bob, 1 - k
+    return _keyframes(min(1.0, t / 0.25), [(0, 0), (.6, 1.15), (1, 1)], EASE_OUT), bob, 1.0
+
+
+def _contain(art, px: int):
+    """The art scaled to fit a transparent px x px square, centred."""
+    from PIL import Image, ImageOps
+
+    fitted = ImageOps.contain(art, (px, px), Image.LANCZOS)
+    square = Image.new('RGBA', (px, px))
+    square.paste(fitted, ((px - fitted.width) // 2, (px - fitted.height) // 2))
+    return square
+
+
+def render_local(art) -> list:
+    """The frames (3 s, 30 fps, CANVAS x CANVAS) of a still playing the plain envelope (envelope_at) in a LOCAL_ART_PX
+    box, with the white halo an imported emote gets (drop-shadow(0 0 8px #fff8) at 150 px)."""
+    from PIL import Image, ImageFilter
+
+    sprite = Image.new('RGBA', (CANVAS, CANVAS))
+    sprite.paste(_contain(art, LOCAL_ART_PX), ((CANVAS - LOCAL_ART_PX) // 2,) * 2)
+    halo_alpha = sprite.getchannel('A').filter(ImageFilter.GaussianBlur(4 / 150 * LOCAL_ART_PX))
+    halo_alpha = halo_alpha.point(lambda a: a * 0x88 // 255)
+    halo = Image.merge('RGBA', (*Image.new('RGB', sprite.size, 'white').split(), halo_alpha))
+    sprite = Image.alpha_composite(halo, sprite).convert('RGBa')   # premultiplied, so resampling leaves no dark fringe
+    c = CANVAS / 2
+    frames = []
+    for i in range(int(round(DURATION * FPS))):
+        scale, dy, opacity = envelope_at(i / FPS)
+        if scale < 1e-3:
+            frames.append(Image.new('RGBA', (CANVAS, CANVAS)))
+            continue
+        # The affine maps each output pixel back into the sprite: scaled about the centre, then moved by the bob.
+        moved = sprite.transform((CANVAS, CANVAS), Image.AFFINE,
+                                 (1 / scale, 0, c - c / scale, 0, 1 / scale, c - (c + dy * LOCAL_ART_PX) / scale),
+                                 resample=Image.BICUBIC).convert('RGBA')
+        if opacity < 1:
+            moved.putalpha(moved.getchannel('A').point(lambda a: round(a * opacity)))
+        frames.append(moved)
+    return frames
+
+
+def bake_local(local: dict[str, tuple[str, str]], out_dir: Path, src_dir: Path = LOCAL_DIR) -> list[dict]:
+    """Bakes each local emote (slug -> (name, nameZh)) from src_dir/<slug>.png and, when there is one, <slug>.ogg into
+    out_dir: <slug>.webp (render_local), <slug>.png (the art in ICON_PX) and <slug>.ogg (copied as it is). Returns one
+    catalog entry per emote; League id 0 marks it as not League's."""
+    from PIL import Image
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    entries = []
+    for slug, (name, name_zh) in local.items():
+        art = Image.open(src_dir / f'{slug}.png').convert('RGBA')
+        write_webp(render_local(art), out_dir / f'{slug}.webp')
+        _contain(art, ICON_PX).save(out_dir / f'{slug}.png')
+        sound = src_dir / f'{slug}.ogg'
+        if sound.is_file():
+            shutil.copyfile(sound, out_dir / f'{slug}.ogg')
+        entries.append({'slug': slug, 'leagueId': 0, 'name': name, 'nameZh': name_zh, 'hasSound': sound.is_file(),
+                        'soundEvent': None, 'soundSource': 'local' if sound.is_file() else SOUND_NONE,
+                        'bytes': (out_dir / f'{slug}.webp').stat().st_size, 'unfaithful': False})
+    return entries
+
+
 # ---- the bundled set (extract_assets.py --emotes) ----
 SLUG_RE = re.compile(r'[a-z0-9_]{1,40}')
 CATALOG_HEADER = '// Generated by tools/extract-assets (--emotes). Do not edit by hand.'
 
 
 def check_emote_set(emote_set: dict[str, int], wheel: list[str], click: str,
-                    name_overrides: dict[str, tuple[str, str]] | None = None) -> None:
-    """Slugs match SLUG_RE, League ids are unique, the wheel is 8 distinct slugs of the set and the centre is one too,
-    and so is every slug in name_overrides."""
-    problems = [f'bad slug {s!r}' for s in emote_set if not SLUG_RE.fullmatch(s)]
+                    name_overrides: dict[str, tuple[str, str]] | None = None,
+                    local: dict[str, tuple[str, str]] | None = None) -> None:
+    """Slugs match SLUG_RE and are in only one of the set and local, League ids are unique, the wheel is 8 distinct slugs
+    of the two and the centre is one too, and every slug in name_overrides is in the set."""
+    local = local or {}
+    problems = [f'bad slug {s!r}' for s in [*emote_set, *local] if not SLUG_RE.fullmatch(s)]
+    problems += [f'{s!r} is in both EMOTE_SET and LOCAL_EMOTES' for s in local if s in emote_set]
     ids = list(emote_set.values())
     problems += [f'League id {i} appears twice' for i in sorted({i for i in ids if ids.count(i) > 1})]
     if len(wheel) != 8 or len(set(wheel)) != 8:
         problems.append('the default wheel needs 8 distinct slugs')
-    problems += [f'{s!r} is not in EMOTE_SET' for s in [*wheel, click, *(name_overrides or {})] if s not in emote_set]
+    problems += [f'{s!r} is not in EMOTE_SET or LOCAL_EMOTES' for s in [*wheel, click]
+                 if s not in emote_set and s not in local]
+    problems += [f'{s!r} is not in EMOTE_SET' for s in name_overrides or {} if s not in emote_set]
     if problems:
         raise SystemExit('EMOTE_SET: ' + '; '.join(problems))
 
@@ -1867,13 +1975,14 @@ def bake_set(league: Path, vgmstream: str, emote_set: dict[str, int], out_dir: P
 
 def write_emotes(league: Path, vgmstream: str, emote_set: dict[str, int], wheel: list[str], click: str,
                  out_dir: Path, catalog: Path, name_overrides: dict[str, tuple[str, str]] | None = None,
-                 glow_opacity: float | None = None) -> list[dict]:
-    """--emotes: assets/emotes/<slug>.webp (WEBP_ALPHA_QUALITY), .png and .ogg for every EMOTE_SET entry, any other file
-    in out_dir removed, then src/shared/emoteCatalog.ts (with name_overrides applied: slug -> (name, nameZh)). Stops
-    before baking when the Chinese names (load_zh_names) lack an entry or two emotes would share a name, and afterwards
-    when an entry lacks its .webp or .png."""
+                 glow_opacity: float | None = None, local: dict[str, tuple[str, str]] | None = None) -> list[dict]:
+    """--emotes: assets/emotes/<slug>.webp (WEBP_ALPHA_QUALITY), .png and .ogg for every EMOTE_SET entry, then for every
+    local emote (bake_local, listed after them), any other file in out_dir removed, then src/shared/emoteCatalog.ts (with
+    name_overrides applied: slug -> (name, nameZh)). Stops before baking when the Chinese names (load_zh_names) lack an
+    entry or two emotes would share a name, and afterwards when an entry lacks its .webp or .png."""
     name_overrides = name_overrides or {}
-    check_emote_set(emote_set, wheel, click, name_overrides)
+    local = local or {}
+    check_emote_set(emote_set, wheel, click, name_overrides, local)
     zh = load_zh_names(required=True)
     no_zh = sorted(i for i in emote_set.values() if i not in zh)
     if no_zh:
@@ -1884,13 +1993,14 @@ def write_emotes(league: Path, vgmstream: str, emote_set: dict[str, int], wheel:
     if unknown:
         raise SystemExit(f'no emotes with the League ids {unknown}')
     names = [name_overrides.get(slug, (by_id[eid]['name'], zh[eid])) for slug, eid in emote_set.items()]
+    names += local.values()
     for lang, field in enumerate(('name', 'nameZh')):
         values = [n[lang] for n in names]
         same = sorted({v for v in values if values.count(v) > 1})
         if same:
             raise SystemExit(f'emotes share the {field} {same}: give each its own in NAME_OVERRIDES')
-    entries = bake_set(league, vgmstream, emote_set, out_dir, zh, glow_opacity)
-    expected = {f'{e["slug"]}.{ext}' for e in entries for ext in ('webp', 'png', *(['ogg'] if e['hasSound'] else []))}
+    entries = bake_set(league, vgmstream, emote_set, out_dir, zh, glow_opacity) + bake_local(local, out_dir)
+    expected ={f'{e["slug"]}.{ext}' for e in entries for ext in ('webp', 'png', *(['ogg'] if e['hasSound'] else []))}
     for f in sorted(out_dir.iterdir()):
         if f.name not in expected:
             f.unlink()

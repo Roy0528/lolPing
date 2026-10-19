@@ -45,6 +45,7 @@ export const EMOTE_CATALOG: readonly CatalogEmote[] = [
   { slug: 'come_again', leagueId: 3962, name: 'Come again?', nameZh: '一脸问号', hasSound: true },
   { slug: 'magpie_oopsie', leagueId: 4091, name: 'Magpie Oopsie', nameZh: '雀实有问题', hasSound: true },
   { slug: 'such_foolishness', leagueId: 4730, name: 'Such Foolishness', nameZh: '如此愚蠢', hasSound: true },
+  { slug: 'bard_horn', leagueId: 0, name: 'Bard Horn', nameZh: '巴德吹喇叭', hasSound: true },
 ];
 export const DEFAULT_EMOTE_WHEEL: readonly string[] = [
   'unworthy_cn',
@@ -53,7 +54,7 @@ export const DEFAULT_EMOTE_WHEEL: readonly string[] = [
   'cheeky_poro',
   'angry_kitty',
   'gg_heart',
-  'bee_happy',
+  'bard_horn',
   'bee_mad',
 ];
 export const DEFAULT_CLICK_EMOTE = 'facepalm';

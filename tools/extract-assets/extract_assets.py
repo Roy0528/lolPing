@@ -101,9 +101,14 @@ EMOTE_SET: dict[str, int] = {
     'magpie_oopsie': 4091,
     'such_foolishness': 4730,
 }
+# Emotes League has no effect file for: slug -> (name, nameZh), baked by --emotes after EMOTE_SET from the still
+# local-emotes/<slug>.png and the sound local-emotes/<slug>.ogg (emote_bake.bake_local).
+LOCAL_EMOTES: dict[str, tuple[str, str]] = {
+    'bard_horn': ('Bard Horn', '巴德吹喇叭'),  # the ARAM horn icon; the sound is clipped from a recording
+}
 # The default emote wheel, top slot then clockwise, and the centre (click) emote.
 DEFAULT_EMOTE_WHEEL: list[str] = ['unworthy_cn', 'poro_snax', 'sad_kitten', 'cheeky_poro', 'angry_kitty', 'gg_heart',
-                                  'bee_happy', 'bee_mad']
+                                  'bard_horn', 'bee_mad']
 DEFAULT_CLICK_EMOTE = 'facepalm'
 # Names for the catalog where the client's are not enough: slug -> (name, nameZh). The client calls both Unworthy emotes
 # "Unworthy" / "弱爆", and the app's settings list emotes by name.
@@ -460,7 +465,7 @@ def main() -> None:
 
         sys.stdout.reconfigure(encoding='utf-8')
         emote_bake.write_emotes(args.league, args.vgmstream, EMOTE_SET, DEFAULT_EMOTE_WHEEL, DEFAULT_CLICK_EMOTE,
-                                EMOTE_OUT, EMOTE_CATALOG, NAME_OVERRIDES, args.glow_opacity)
+                                EMOTE_OUT, EMOTE_CATALOG, NAME_OVERRIDES, args.glow_opacity, LOCAL_EMOTES)
     elif args.wad_textures:
         files = wad_read(args.league / GLOBAL_WAD_REL, list(WAD_TEXTURES.values()))
         TEXTURE_OUT.mkdir(parents=True, exist_ok=True)

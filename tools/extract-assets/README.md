@@ -118,6 +118,16 @@ It then deletes every other file in `assets/emotes/` and generates `src/shared/e
 2. Append `'slug': id,` to `EMOTE_SET` in `extract_assets.py`. The slug must match `^[a-z0-9_]{1,40}$` and be unique; the position in the dict is its position in the pool.
 3. Run `--emotes`, check the new files in `assets/emotes/`, and commit them with `src/shared/emoteCatalog.ts`.
 
+### Local emotes
+
+An emote League has no effect file for goes in `LOCAL_EMOTES` in `extract_assets.py` (slug → name, nameZh), with its still as `local-emotes/<slug>.png` and, optionally, its sound as `local-emotes/<slug>.ogg`. `--emotes` bakes it after `EMOTE_SET`:
+
+- **`<slug>.webp`:** the still, fitted to the 256 px art box, playing the plain envelope an imported emote gets (pop in, bob, shrink and fade over the last 0.35 s) with the same white halo, on the same 320 px, 3 s, 30 fps canvas.
+- **`<slug>.png`:** the still at 128 px.
+- **`<slug>.ogg`:** the sound, copied as it is.
+
+Its catalog entry has League id 0. A local slug can go on `DEFAULT_EMOTE_WHEEL` or be `DEFAULT_CLICK_EMOTE` like any other.
+
 ### Developer commands
 
 `emote_bake.py` also has these commands (`--league` is required for all of them):

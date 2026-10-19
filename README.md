@@ -185,7 +185,7 @@ Pull requests and ideas are welcome. Before you start:
 
 ## Ping assets
 
-The icons in `assets/textures` and the sounds in `assets/sounds` come from a local League of Legends install. [`tools/extract-assets`](tools/extract-assets) explains how to extract them again after a patch. The emote animations, icons and sounds in `assets/emotes` are © Riot Games too, and `tools/extract-assets --emotes` bakes them from the same install.
+The icons in `assets/textures` and the sounds in `assets/sounds` come from a local League of Legends install. [`tools/extract-assets`](tools/extract-assets) explains how to extract them again after a patch. The emote animations, icons and sounds in `assets/emotes` are © Riot Games too, and `tools/extract-assets --emotes` bakes them from the same install. `bard_horn` is the exception: it is baked from the still and the sound in `tools/extract-assets/local-emotes/`.
 
 ## License
 
